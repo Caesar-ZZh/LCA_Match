@@ -7,14 +7,16 @@ import io
 import csv
 
 # ================= 网页基础配置 =================
-st.set_page_config(page_title="LCA 智能匹配系统 (V44)", page_icon="🌱", layout="wide")
+st.set_page_config(page_title="LCA 智能匹配系统 (V45)", page_icon="🌱", layout="wide")
 
 st.title("🌱 LCA 智能匹配系统 (Web版)")
 st.markdown("""
 ### 🚀 使用指南
 1. **后台数据**：请确保服务器端已加载所有基础数据库。
 2. **上传文件**：支持 .xlsx 和 .csv。
-3. **自动处理**：解决 Streamlit 预览重名列问题，确保下载格式严格对齐。
+3. **自动处理**：
+    * 智能去重：自动合并内容相同但 ID 不同的冗余项。
+    * 格式对齐：完美适配多重选择版本表头。
 """)
 
 # ================= 0. 后台文件加载器 =================
@@ -72,7 +74,7 @@ if missing_files:
 else:
     st.sidebar.success("✅ 所有参考库加载正常")
 
-# ================= 1. 核心算法 (V38逻辑) =================
+# ================= 1. 核心算法 (V45: 增加内容去重) =================
 
 def process_matching(df_model, ref_dfs):
     if len(ref_dfs) < 6:
@@ -240,7 +242,31 @@ def process_matching(df_model, ref_dfs):
             unique_candidates = {c['ID']: c for c in candidates}.values()
             filtered = [c for c in unique_candidates if str(c['地理位置']).strip().lower() in STRICT_LOCATIONS]
             candidates = filtered
+            
+            # 先按分数排序，保证最好的排在前面
             candidates.sort(key=lambda x: get_score(x, m_name, m_cat), reverse=True)
+            
+            # --- 🔥🔥🔥 V45 新增：内容去重逻辑 🔥🔥🔥 ---
+            deduped = []
+            seen_sigs = set()
+            for c in candidates:
+                # 提取用于判断“内容是否重复”的关键字段
+                # 注意：必须区分 ECO 和 HiQ，因为它们在表格中显示的位置不同
+                name = c.get('背景名称', '').strip()
+                ref = c.get('参考产品', '').strip()
+                loc = c.get('地理位置', '').strip()
+                unit = c.get('单位', '').strip()
+                is_hiq = 'hiq' in name.lower()
+                
+                # 制作“内容指纹”
+                sig = (name, ref, loc, unit, is_hiq)
+                
+                if sig not in seen_sigs:
+                    seen_sigs.add(sig)
+                    deduped.append(c)
+            
+            candidates = deduped
+            # ---------------------------------------------
             
             for i, cand in enumerate(candidates):
                 is_default = (i == 0)
@@ -305,11 +331,11 @@ if uploaded_file:
                 st.download_button(
                     label="📥 下载最终结果 (CSV)",
                     data=csv_buffer.getvalue().encode('utf-8-sig'),
-                    file_name="LCA_匹配结果_V44.csv",
+                    file_name="LCA_匹配结果_V45.csv",
                     mime="text/csv"
                 )
                 
-                # --- 预览逻辑 (🔥 修复点：去重列名，只为了展示) ---
+                # --- 预览逻辑 (去重列名，只为了展示) ---
                 with st.expander("👁️ 点击查看结果预览"):
                     # 构造一套去重的表头，专门给 Streamlit 用
                     display_headers = []
