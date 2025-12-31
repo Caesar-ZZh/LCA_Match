@@ -7,20 +7,19 @@ import io
 import csv
 
 # ================= 网页基础配置 =================
-st.set_page_config(page_title="LCA 智能匹配系统 (V40)", page_icon="🌱", layout="wide")
+st.set_page_config(page_title="LCA 智能匹配系统 (V42)", page_icon="🌱", layout="wide")
 
 st.title("🌱 LCA 智能匹配系统 (Web版)")
 st.markdown("""
 ### 🚀 使用指南
 1. **后台数据**：请确保服务器端已加载所有基础数据库。
-2. **上传文件**：请上传需要匹配的 **[模型物料项]** 表格（支持 .xlsx 或 .csv）。
-3. **自动处理**：系统将执行 V38 核心算法（冷却水修正、基本流兜底、严格地理过滤）。
+2. **上传文件**：支持 **.xlsx** (Excel) 和 **.csv** 格式。
+3. **自动处理**：系统将自动识别编码格式，并执行 V38 核心算法。
 """)
 
-# ================= 0. 后台文件加载器 (V40: 大小写不敏感增强版) =================
+# ================= 0. 后台文件加载器 =================
 @st.cache_data
 def load_reference_data():
-    # 核心文件名关键词 (不带后缀，代码会自动去找)
     required_map = {
         "头表": "匹配关系头表", 
         "上游表": "匹配关系上游背景数据行表",
@@ -33,20 +32,15 @@ def load_reference_data():
     loaded = {}
     missing = []
     
-    # 1. 获取当前目录下所有文件 (全部转小写，做成索引)
     try:
         all_files_on_disk = os.listdir('.')
     except:
         all_files_on_disk = []
         
-    # 建立映射: { "文件名.csv": "真实文件名.CSV" } (忽略大小写)
     file_index = {f.lower(): f for f in all_files_on_disk}
 
-    # 2. 尝试寻找每一个必须的文件
     for key, core_name in required_map.items():
-        # 我们尝试找 .csv, .CSV, .xlsx, .XLSX
         candidates = [f"{core_name}.csv".lower(), f"{core_name}.xlsx".lower()]
-        
         found_real_name = None
         for cand in candidates:
             if cand in file_index:
@@ -54,15 +48,15 @@ def load_reference_data():
                 break
         
         if found_real_name:
-            # 找到了，开始读取
             try:
                 if found_real_name.lower().endswith('.csv'):
                     try:
                         loaded[key] = pd.read_csv(found_real_name, dtype=str)
                     except:
+                        # 自动尝试 GBK 读取后台 CSV
                         loaded[key] = pd.read_csv(found_real_name, encoding='gbk', dtype=str)
                 else:
-                    # 显式指定引擎读取 Excel
+                    # 读取后台 Excel 也要指定引擎
                     loaded[key] = pd.read_excel(found_real_name, dtype=str, engine='openpyxl')
             except Exception as e:
                 missing.append(f"{found_real_name} (损坏: {str(e)})")
@@ -71,26 +65,20 @@ def load_reference_data():
     
     return loaded, missing
 
-# 加载数据
 with st.spinner('正在加载后台数据库...'):
     ref_dfs, missing_files = load_reference_data()
 
-# 侧边栏状态监测
 st.sidebar.title("📦 数据库状态")
 if missing_files:
-    st.sidebar.error(f"❌ 缺失文件: {len(missing_files)} 个")
-    for f in missing_files:
-        st.sidebar.text(f"- {f}")
-    st.warning("⚠️ 后台文件缺失！你可以上传文件，但无法运行匹配。")
+    st.sidebar.warning(f"⚠️ 后台文件缺失: {len(missing_files)} 个")
 else:
     st.sidebar.success("✅ 所有参考库加载正常")
 
-# ================= 1. 核心算法 =================
+# ================= 1. 核心算法 (V38逻辑) =================
 
 def process_matching(df_model, ref_dfs):
-    # 再次检查文件是否齐全
     if len(ref_dfs) < 6:
-        return None, None, "缺少参考文件，无法计算！"
+        return [], ["错误：后台参考文件不全"], None
 
     df_header = ref_dfs['头表']
     bg_dfs = {
@@ -284,25 +272,34 @@ def process_matching(df_model, ref_dfs):
     ]
     return result_data, FINAL_HEADERS, None
 
-# ================= 2. 用户交互界面 =================
+# ================= 2. 用户交互界面 (V42: 融合修复版) =================
 
 uploaded_file = st.file_uploader("📂 点击此处上传模型表", type=['xlsx', 'csv'])
 
 if uploaded_file:
     try:
-        # 读取文件
+        # 🔥 V42 核心修复逻辑 🔥
+        
+        # 情况1: 如果是 CSV 文件
         if uploaded_file.name.lower().endswith('.csv'):
-            df_input = pd.read_csv(uploaded_file, dtype=str)
+            try:
+                # 优先尝试 utf-8 读取
+                df_input = pd.read_csv(uploaded_file, dtype=str)
+            except UnicodeDecodeError:
+                # 如果 utf-8 失败 (0xb2 error), 重置指针并尝试 GBK
+                uploaded_file.seek(0)
+                df_input = pd.read_csv(uploaded_file, dtype=str, encoding='gbk')
+        
+        # 情况2: 如果是 Excel 文件
         else:
-            # 显式指定引擎，防止 streamlit cloud 报错
+            # 必须指定 engine='openpyxl' (前提是已安装 pip install openpyxl)
             df_input = pd.read_excel(uploaded_file, dtype=str, engine='openpyxl')
         
         st.info(f"📄 成功读取: {uploaded_file.name}, 共 {len(df_input)} 行")
         
         if st.button("🚀 开始运行匹配", type="primary"):
-            # 检查后台文件是否就绪
             if missing_files:
-                st.error(f"❌ 后台参考文件缺失 ({len(missing_files)}个)，无法计算。请检查侧边栏。")
+                st.error("无法运行：后台缺少必要的参考数据库，请联系管理员上传。")
             else:
                 result_data, headers, err = process_matching(df_input, ref_dfs)
                 
@@ -316,7 +313,7 @@ if uploaded_file:
                 st.download_button(
                     label="📥 下载最终结果 (CSV)",
                     data=csv_buffer.getvalue().encode('utf-8-sig'),
-                    file_name="LCA_匹配结果_V40.csv",
+                    file_name="LCA_匹配结果_V42.csv",
                     mime="text/csv"
                 )
                 
