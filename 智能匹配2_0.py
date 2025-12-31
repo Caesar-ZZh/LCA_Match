@@ -7,14 +7,14 @@ import io
 import csv
 
 # ================= 网页基础配置 =================
-st.set_page_config(page_title="LCA 智能匹配系统 (V43)", page_icon="🌱", layout="wide")
+st.set_page_config(page_title="LCA 智能匹配系统 (V44)", page_icon="🌱", layout="wide")
 
 st.title("🌱 LCA 智能匹配系统 (Web版)")
 st.markdown("""
 ### 🚀 使用指南
 1. **后台数据**：请确保服务器端已加载所有基础数据库。
-2. **上传文件**：支持含重复列名（如同时含ECO地区和HiQ地区）的复杂表头。
-3. **自动处理**：系统将自动重命名重复列，并执行 V38 核心算法。
+2. **上传文件**：支持 .xlsx 和 .csv。
+3. **自动处理**：解决 Streamlit 预览重名列问题，确保下载格式严格对齐。
 """)
 
 # ================= 0. 后台文件加载器 =================
@@ -270,71 +270,22 @@ def process_matching(df_model, ref_dfs):
     ]
     return result_data, FINAL_HEADERS, None
 
-# ================= 2. 用户交互界面 (V43: 智能去重版) =================
+# ================= 2. 用户交互界面 =================
 
 uploaded_file = st.file_uploader("📂 点击此处上传模型表", type=['xlsx', 'csv'])
 
-# 🔥 辅助函数：处理重复列名 🔥
-def deduplicate_columns(df):
-    cols = pd.Series(df.columns)
-    for dup in cols[cols.duplicated()].unique(): 
-        cols[cols[cols == dup].index.values.tolist()] = [dup + '.' + str(i) if i != 0 else dup for i in range(sum(cols == dup))]
-    df.columns = cols
-    return df
-
 if uploaded_file:
     try:
-        # 1. 尝试读取
+        # 读取输入文件
         if uploaded_file.name.lower().endswith('.csv'):
             try:
-                # 尝试标准读
                 df_input = pd.read_csv(uploaded_file, dtype=str)
             except UnicodeDecodeError:
                 uploaded_file.seek(0)
                 df_input = pd.read_csv(uploaded_file, dtype=str, encoding='gbk')
-            except ValueError as ve:
-                 # 捕获 "Duplicate column names found" (CSV较少见，但为了稳健)
-                 if "Duplicate column names" in str(ve):
-                     uploaded_file.seek(0)
-                     # 不读表头，手动处理
-                     df_input = pd.read_csv(uploaded_file, header=None, dtype=str)
-                     # 第一行设为列名并去重
-                     headers = df_input.iloc[0]
-                     df_input = df_input[1:]
-                     df_input.columns = headers
-                     df_input = deduplicate_columns(df_input)
-                 else:
-                     raise ve
         else:
-            # Excel 处理逻辑
-            try:
-                df_input = pd.read_excel(uploaded_file, dtype=str, engine='openpyxl')
-            except ValueError as ve:
-                # 🔥🔥🔥 核心修复：捕获重复列名错误 🔥🔥🔥
-                if "Duplicate column names" in str(ve):
-                    # 重新读取，不要表头 (header=None)
-                    uploaded_file.seek(0)
-                    df_input = pd.read_excel(uploaded_file, header=None, dtype=str, engine='openpyxl')
-                    # 取第一行作为表头
-                    headers = df_input.iloc[0]
-                    # 重新命名列 (手动去重)
-                    new_cols = []
-                    seen = {}
-                    for c in headers:
-                        c_str = str(c)
-                        if c_str in seen:
-                            seen[c_str] += 1
-                            new_cols.append(f"{c_str}.{seen[c_str]}")
-                        else:
-                            seen[c_str] = 0
-                            new_cols.append(c_str)
-                    
-                    df_input.columns = new_cols
-                    # 删掉作为表头的第一行
-                    df_input = df_input[1:]
-                else:
-                    raise ve
-
+            df_input = pd.read_excel(uploaded_file, dtype=str, engine='openpyxl')
+        
         st.info(f"📄 成功读取: {uploaded_file.name}, 共 {len(df_input)} 行")
         
         if st.button("🚀 开始运行匹配", type="primary"):
@@ -345,20 +296,34 @@ if uploaded_file:
                 
                 st.success("🎉 匹配成功！")
                 
+                # --- 下载逻辑 (保留原汁原味的表头，包含重复名) ---
                 csv_buffer = io.StringIO()
                 writer = csv.writer(csv_buffer)
-                writer.writerow(headers)
+                writer.writerow(headers) # 这里写入原始表头，CSV支持重复列名
                 writer.writerows(result_data)
                 
                 st.download_button(
                     label="📥 下载最终结果 (CSV)",
                     data=csv_buffer.getvalue().encode('utf-8-sig'),
-                    file_name="LCA_匹配结果_V43.csv",
+                    file_name="LCA_匹配结果_V44.csv",
                     mime="text/csv"
                 )
                 
+                # --- 预览逻辑 (🔥 修复点：去重列名，只为了展示) ---
                 with st.expander("👁️ 点击查看结果预览"):
-                    st.dataframe(pd.DataFrame(result_data, columns=[h.replace('\n','') for h in headers]).head(50))
+                    # 构造一套去重的表头，专门给 Streamlit 用
+                    display_headers = []
+                    seen = {}
+                    for h in headers:
+                        clean_h = h.replace('\n', '')
+                        if clean_h in seen:
+                            seen[clean_h] += 1
+                            display_headers.append(f"{clean_h}.{seen[clean_h]}")
+                        else:
+                            seen[clean_h] = 0
+                            display_headers.append(clean_h)
+                            
+                    st.dataframe(pd.DataFrame(result_data, columns=display_headers).head(50))
 
     except Exception as e:
         st.error(f"❌ 文件解析失败: {e}")
